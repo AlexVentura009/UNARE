@@ -11,13 +11,17 @@
     
     <div class="max-w-md mx-auto w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
         
-        <!-- Logo Institucional Centrado -->
-        <div class="flex justify-center mb-4">
-            <img src="https://i.ibb.co/BVYHdRY1/og-default.png" alt="Logo UNARE" class="h-14 object-contain">
+        <!-- Cabecera con Logo al doble de tamaño y Botón de Sincronización / Refresh -->
+        <div class="flex items-center justify-between mb-4">
+            <div class="w-8"></div> <!-- Espaciador izquierdo para equilibrar -->
+            <img src="https://i.ibb.co/BVYHdRY1/og-default.png" alt="Logo UNARE" class="h-24 object-contain">
+            <button onclick="sincronizarBD()" id="btnSync" title="Sincronizar Base de Datos" class="bg-slate-800 hover:bg-slate-700 p-2.5 rounded-xl border border-slate-700 text-emerald-400 transition text-xs flex items-center gap-1 shadow">
+                🔄 <span id="syncText" class="text-[10px] hidden sm:inline">Sync</span>
+            </button>
         </div>
 
         <h1 class="text-xl font-bold text-center mb-1 text-emerald-400">UNARE | Registro de Asistencia</h1>
-        <p class="text-xs text-slate-400 text-center mb-6">Selecciona el modo de escaneo en fila</p>
+        <p class="text-xs text-slate-400 text-center mb-6">Modo local en memoria (Ultra rápido)</p>
 
         <!-- Selector de Modo (Graduados vs Invitados) -->
         <div class="grid grid-cols-2 gap-2 mb-6 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
@@ -29,7 +33,7 @@
             </button>
         </div>
 
-        <!-- Toggle para Encender / Apagar Lector QR (Ahorro de batería) -->
+        <!-- Toggle para Encender / Apagar Lector QR -->
         <div class="mb-4 bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
             <div>
                 <span class="block text-xs font-semibold text-slate-200">Cámara / Lector QR</span>
@@ -51,7 +55,7 @@
             <label class="block text-xs font-semibold text-slate-300 uppercase mb-2" id="labelFolio">Folio o Código QR del Graduado</label>
             <div class="flex gap-2">
                 <input type="text" id="inputQR" placeholder="Ej. UNR-G001" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 text-white">
-                <button onclick="buscarFolio()" id="btnBuscar" class="bg-emerald-600 hover:bg-emerald-500 font-semibold px-5 rounded-xl text-sm transition text-white">Buscar</button>
+                <button onclick="buscarFolioLocal()" id="btnBuscar" class="bg-emerald-600 hover:bg-emerald-500 font-semibold px-5 rounded-xl text-sm transition text-white">Buscar</button>
             </div>
         </div>
 
@@ -81,12 +85,49 @@
         let modoActual = "graduados";
         let registroActual = null;
         let html5QrCode = null;
+        let dbMemoria = []; // Base de datos en la RAM del celular
+
+        // Al cargar la página, recuperamos la BD local de inmediato
+        window.onload = function() {
+            let cacheGuardada = localStorage.getItem('unare_db_cache');
+            if (cacheGuardada) {
+                dbMemoria = JSON.parse(cacheGuardada);
+                console.log("BD cargada desde memoria local del cel:", dbMemoria.length, "registros.");
+            } else {
+                sincronizarBD(); // Si no hay caché, la descargamos en automático
+            }
+        };
+
+        // Función del Botón de Sincronización Manual (Refresh)
+        async function sincronizarBD() {
+            const btnSync = document.getElementById('btnSync');
+            btnSync.classList.add('animate-spin');
+            
+            try {
+                let res = await fetch(WEB_APP_URL, {
+                    method: "POST",
+                    body: JSON.stringify({ action: "obtenerTodo" })
+                });
+                let json = await res.json();
+
+                if (json.status === "success") {
+                    dbMemoria = json.data;
+                    localStorage.setItem('unare_db_cache', JSON.stringify(dbMemoria));
+                    alert("¡Base de datos sincronizada con éxito! (" + dbMemoria.length + " registros)");
+                } else {
+                    alert("Error al sincronizar: " + json.mensaje);
+                }
+            } catch (err) {
+                alert("Error de red al intentar sincronizar.");
+            } finally {
+                btnSync.classList.remove('animate-spin');
+            }
+        }
 
         function cambiarModo(modo) {
             modoActual = modo;
             registroActual = null;
             
-            // Apagar cámara al cambiar de modo
             const toggle = document.getElementById('toggleScanner');
             if(toggle) toggle.checked = false;
             apagarLectorQR();
@@ -143,7 +184,7 @@
                     document.getElementById('toggleScanner').checked = false;
                     apagarLectorQR();
                     document.getElementById('readerContainer').classList.add('hidden');
-                    buscarFolio();
+                    buscarFolioLocal();
                 },
                 (errorMessage) => {}
             ).catch(err => {
@@ -161,26 +202,24 @@
             }
         }
 
-        async function buscarFolio() {
+        // BÚSQUEDA LOCAL EN MEMORIA (Velocidad Power Apps ⚡)
+        function buscarFolioLocal() {
             const qr = document.getElementById('inputQR').value.trim();
             if (!qr) return alert("Ingresa un folio válido.");
 
-            try {
-                let res = await fetch(WEB_APP_URL, {
-                    method: "POST",
-                    body: JSON.stringify({ action: "buscarQR", qr: qr })
-                });
-                let json = await res.json();
+            if (dbMemoria.length === 0) {
+                alert("La memoria local está vacía. Dale clic al botón de sincronizar (🔄) arriba.");
+                return;
+            }
 
-                if (json.status === "success") {
-                    registroActual = json.data;
-                    mostrarDatosGraduado(json.data);
-                } else {
-                    alert(json.mensaje);
-                    document.getElementById('resultadoContainer').classList.add('hidden');
-                }
-            } catch (err) {
-                alert("Error de conexión con el servidor.");
+            let encontrado = dbMemoria.find(item => String(item.qr).trim().toLowerCase() === qr.toLowerCase());
+
+            if (encontrado) {
+                registroActual = encontrado;
+                mostrarDatosGraduado(encontrado);
+            } else {
+                alert("Folio no encontrado en la base de datos local.");
+                document.getElementById('resultadoContainer').classList.add('hidden');
             }
         }
 
@@ -285,6 +324,15 @@
                 let json = await res.json();
                 if (json.status === "success") {
                     alert("¡Acceso de " + modoActual + " registrado y sincronizado con éxito!");
+                    
+                    // Actualizamos también la caché local en memoria al instante
+                    if (modoActual === "graduados") {
+                        registroActual.estatusActual = "A TIEMPO";
+                    } else {
+                        registroActual.invitadosEstatus = invitadosActualizados;
+                    }
+                    localStorage.setItem('unare_db_cache', JSON.stringify(dbMemoria));
+
                     document.getElementById('inputQR').value = "";
                     document.getElementById('resultadoContainer').classList.add('hidden');
                 } else {
