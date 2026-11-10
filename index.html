@@ -1,1 +1,340 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UNARE 2026 - Registro de Asistencia</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body id="bodyBg" class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between p-4 transition-colors duration-300">
+    
+    <div class="max-w-md mx-auto w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
+        
+        <!-- Cabecera con Logo al doble de tamaño y Botón de Sincronización / Refresh -->
+        <div class="flex items-center justify-between mb-4">
+            <div class="w-8"></div>
+            <img src="https://i.ibb.co/BVYHdRY1/og-default.png" alt="Logo UNARE" class="h-24 object-contain">
+            <button onclick="sincronizarBD()" id="btnSync" title="Sincronizar Base de Datos" class="bg-slate-800 hover:bg-slate-700 p-2.5 rounded-xl border border-slate-700 text-emerald-400 transition text-xs flex items-center gap-1 shadow">
+                🔄 <span id="syncText" class="text-[10px] hidden sm:inline">Sync</span>
+            </button>
+        </div>
 
+        <h1 class="text-xl font-bold text-center mb-1 text-emerald-400">UNARE | Registro de Asistencia</h1>
+        <p class="text-xs text-slate-400 text-center mb-6">Modo local en memoria (Ultra rápido)</p>
+
+        <!-- Selector de Modo (Graduados vs Invitados) -->
+        <div class="grid grid-cols-2 gap-2 mb-6 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+            <button onclick="cambiarModo('graduados')" id="btnModoGraduados" class="py-2.5 text-xs font-bold rounded-lg transition bg-emerald-600 text-white shadow">
+                🎓 Graduados
+            </button>
+            <button onclick="cambiarModo('invitados')" id="btnModoInvitados" class="py-2.5 text-xs font-bold rounded-lg transition text-slate-400 hover:text-white">
+                👥 Invitados
+            </button>
+        </div>
+
+        <!-- Toggle para Encender / Apagar Lector QR -->
+        <div class="mb-4 bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+            <div>
+                <span class="block text-xs font-semibold text-slate-200">Cámara / Lector QR</span>
+                <span class="block text-[10px] text-slate-400">Ahorra batería apagándolo cuando no uses</span>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" id="toggleScanner" onchange="toggleLectorQR(this)" class="sr-only peer">
+                <div class="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+        </div>
+
+        <!-- Contenedor de la Cámara -->
+        <div id="readerContainer" class="hidden mb-4 bg-slate-950 p-2 rounded-xl border border-slate-800">
+            <div id="reader" class="w-full rounded-lg overflow-hidden"></div>
+        </div>
+
+        <!-- Input de Código QR / Folio -->
+        <div class="mb-4">
+            <label class="block text-xs font-semibold text-slate-300 uppercase mb-2" id="labelFolio">Folio o Código QR del Graduado</label>
+            <div class="flex gap-2">
+                <input type="text" id="inputQR" placeholder="Ej. UNR-G001" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 text-white">
+                <button onclick="buscarFolioLocal()" id="btnBuscar" class="bg-emerald-600 hover:bg-emerald-500 font-semibold px-5 rounded-xl text-sm transition text-white">Buscar</button>
+            </div>
+        </div>
+
+        <!-- Contenedor de Resultado -->
+        <div id="resultadoContainer" class="hidden mt-6 border-t border-slate-800 pt-4">
+            <div id="infoGraduado" class="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-4"></div>
+
+            <!-- Checkboxes de Invitados -->
+            <div id="invitadosSection" class="mb-4 hidden">
+                <label class="block text-xs font-semibold text-blue-300 uppercase mb-2">Control de Acompañantes</label>
+                <div id="listaInvitados" class="space-y-2 bg-slate-950 p-3 rounded-xl border border-slate-800"></div>
+            </div>
+
+            <!-- Botón de Confirmar Acceso -->
+            <button onclick="confirmarAcceso()" id="btnAccion" class="w-full font-bold py-3 rounded-xl text-sm transition shadow-lg bg-emerald-600 hover:bg-emerald-500 text-white">
+                Registrar Asistencia de Graduado
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzpXwd4hI3GJldMKxKiEXx-eIJEXR7rcTYppbEZhhcJS57--8PNmsCNwcmCeRrcc67h/exec";
+        let modoActual = "graduados";
+        let registroActual = null;
+        let html5QrCode = null;
+        let dbMemoria = [];
+
+        window.onload = function() {
+            let cacheGuardada = localStorage.getItem('unare_db_cache');
+            if (cacheGuardada) {
+                dbMemoria = JSON.parse(cacheGuardada);
+            } else {
+                sincronizarBD();
+            }
+        };
+
+        async function sincronizarBD() {
+            const btnSync = document.getElementById('btnSync');
+            btnSync.classList.add('animate-spin');
+            
+            try {
+                let res = await fetch(WEB_APP_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "text/plain;charset=utf-8" },
+                    body: JSON.stringify({ action: "obtenerTodo" })
+                });
+                let json = await res.json();
+
+                if (json.status === "success") {
+                    dbMemoria = json.data;
+                    localStorage.setItem('unare_db_cache', JSON.stringify(dbMemoria));
+                    alert("¡Base de datos sincronizada con éxito! (" + dbMemoria.length + " registros)");
+                } else {
+                    alert("Error al sincronizar: " + json.mensaje);
+                }
+            } catch (err) {
+                alert("Error de red al intentar sincronizar: " + err.toString());
+            } finally {
+                btnSync.classList.remove('animate-spin');
+            }
+        }
+
+        function cambiarModo(modo) {
+            modoActual = modo;
+            registroActual = null;
+            
+            const toggle = document.getElementById('toggleScanner');
+            if(toggle) toggle.checked = false;
+            apagarLectorQR();
+
+            document.getElementById('inputQR').value = "";
+            document.getElementById('resultadoContainer').classList.add('hidden');
+            document.getElementById('infoGraduado').innerHTML = "";
+            document.getElementById('listaInvitados').innerHTML = "";
+            document.getElementById('invitadosSection').classList.add('hidden');
+
+            const btnGrad = document.getElementById('btnModoGraduados');
+            const btnInv = document.getElementById('btnModoInvitados');
+            const btnBuscar = document.getElementById('btnBuscar');
+            const btnAccion = document.getElementById('btnAccion');
+            const labelFolio = document.getElementById('labelFolio');
+
+            if (modo === "graduados") {
+                btnGrad.className = "py-2.5 text-xs font-bold rounded-lg transition bg-emerald-600 text-white shadow";
+                btnInv.className = "py-2.5 text-xs font-bold rounded-lg transition text-slate-400 hover:text-white";
+                btnBuscar.className = "bg-emerald-600 hover:bg-emerald-500 font-semibold px-5 rounded-xl text-sm transition text-white";
+                btnAccion.className = "w-full font-bold py-3 rounded-xl text-sm transition shadow-lg bg-emerald-600 hover:bg-emerald-500 text-white";
+                btnAccion.innerText = "Registrar Asistencia de Graduado";
+                labelFolio.innerText = "Folio o QR del Graduado";
+            } else {
+                btnInv.className = "py-2.5 text-xs font-bold rounded-lg transition bg-blue-600 text-white shadow";
+                btnGrad.className = "py-2.5 text-xs font-bold rounded-lg transition text-slate-400 hover:text-white";
+                btnBuscar.className = "bg-blue-600 hover:bg-blue-500 font-semibold px-5 rounded-xl text-sm transition text-white";
+                btnAccion.className = "w-full font-bold py-3 rounded-xl text-sm transition shadow-lg bg-blue-600 hover:bg-blue-500 text-white";
+                btnAccion.innerText = "Registrar Asistencia de Invitados";
+                labelFolio.innerText = "Folio o QR del Graduado (Acompañantes)";
+            }
+        }
+
+        function toggleLectorQR(checkbox) {
+            const container = document.getElementById('readerContainer');
+            if (checkbox.checked) {
+                container.classList.remove('hidden');
+                iniciarLectorQR();
+            } else {
+                container.classList.add('hidden');
+                apagarLectorQR();
+            }
+        }
+
+        function iniciarLectorQR() {
+            if (!html5QrCode) {
+                html5QrCode = new Html5Qrcode("reader");
+            }
+            html5QrCode.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 250, height: 250 } },
+                (decodedText) => {
+                    document.getElementById('inputQR').value = decodedText;
+                    document.getElementById('toggleScanner').checked = false;
+                    apagarLectorQR();
+                    document.getElementById('readerContainer').classList.add('hidden');
+                    buscarFolioLocal();
+                },
+                (errorMessage) => {}
+            ).catch(err => {
+                alert("No se pudo acceder a la cámara.");
+                document.getElementById('toggleScanner').checked = false;
+                document.getElementById('readerContainer').classList.add('hidden');
+            });
+        }
+
+        function apagarLectorQR() {
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    html5QrCode.clear();
+                }).catch(err => {});
+            }
+        }
+
+        function buscarFolioLocal() {
+            const qr = document.getElementById('inputQR').value.trim();
+            if (!qr) return alert("Ingresa un folio válido.");
+
+            if (dbMemoria.length === 0) {
+                alert("La memoria local está vacía. Dale clic al botón de sincronizar (🔄) arriba.");
+                return;
+            }
+
+            let encontrado = dbMemoria.find(item => String(item.qr).trim().toLowerCase() === qr.toLowerCase());
+
+            if (encontrado) {
+                registroActual = encontrado;
+                mostrarDatosGraduado(encontrado);
+            } else {
+                alert("Folio no encontrado en la base de datos local.");
+                document.getElementById('resultadoContainer').classList.add('hidden');
+            }
+        }
+
+        function mostrarDatosGraduado(data) {
+            document.getElementById('resultadoContainer').classList.remove('hidden');
+            const btnAccion = document.getElementById('btnAccion');
+            
+            let htmlInfo = `
+                <p class="text-xs ${modoActual === 'graduados' ? 'text-emerald-400' : 'text-blue-400'} font-bold uppercase">Modo: ${modoActual}</p>
+                <h2 class="text-lg font-bold text-white mt-1">${data.nombreCompleto}</h2>
+                <p class="text-xs text-slate-400">${data.carrera}</p>
+                <p class="text-xs text-slate-300 mt-2">Estatus actual: <span class="font-semibold">${data.estatusActual}</span></p>
+            `;
+            document.getElementById('infoGraduado').innerHTML = htmlInfo;
+
+            const secInv = document.getElementById('invitadosSection');
+            const listaInv = document.getElementById('listaInvitados');
+            listaInv.innerHTML = "";
+
+            let bloquearBoton = false;
+
+            if (modoActual === "graduados") {
+                if (data.estatusActual && data.estatusActual !== "NO HA LLEGADO") {
+                    bloquearBoton = true;
+                    htmlInfo += `<p class="text-xs text-rose-400 font-bold mt-1">⚠️ El graduado ya registró su asistencia previamente.</p>`;
+                    document.getElementById('infoGraduado').innerHTML = htmlInfo;
+                }
+                secInv.classList.add('hidden');
+            } else {
+                if (data.cantidadInvitados > 0) {
+                    secInv.classList.remove('hidden');
+                    let todosInvitadosLlegaron = true;
+
+                    data.invitadosEstatus.forEach(inv => {
+                        if (inv.index <= data.cantidadInvitados) {
+                            let isChecked = inv.llegado ? 'checked' : '';
+                            let isDisabled = inv.llegado ? 'disabled' : '';
+                            let opacityClass = inv.llegado ? 'opacity-75 cursor-not-allowed' : 'cursor-pointer';
+
+                            if (!inv.llegado) {
+                                todosInvitadosLlegaron = false;
+                            }
+
+                            listaInv.innerHTML += `
+                                <label class="flex items-center gap-3 text-sm ${opacityClass} text-slate-200">
+                                    <input type="checkbox" data-inv-index="${inv.index}" ${isChecked} ${isDisabled} class="w-4 h-4 accent-blue-500 rounded">
+                                    Invitado ${inv.index} ${inv.llegado ? '(Ya ingresó)' : ''}
+                                </label>
+                            `;
+                        }
+                    });
+
+                    if (todosInvitadosLlegaron && data.cantidadInvitados > 0) {
+                        bloquearBoton = true;
+                        listaInv.innerHTML += `<p class="text-xs text-rose-400 font-bold mt-2">⚠️ Todos los invitados de este registro ya ingresaron.</p>`;
+                    }
+                } else {
+                    secInv.classList.add('hidden');
+                    bloquearBoton = true;
+                    htmlInfo += `<p class="text-xs text-amber-400 font-bold mt-1">⚠️ Este graduado no tiene invitados registrados.</p>`;
+                    document.getElementById('infoGraduado').innerHTML = htmlInfo;
+                }
+            }
+
+            if (bloquearBoton) {
+                btnAccion.disabled = true;
+                btnAccion.className = "w-full font-bold py-3 rounded-xl text-sm transition shadow-lg bg-slate-800 text-slate-500 cursor-not-allowed";
+                btnAccion.innerText = "Acceso Completado / No disponible";
+            } else {
+                btnAccion.disabled = false;
+                btnAccion.className = `w-full font-bold py-3 rounded-xl text-sm transition shadow-lg ${modoActual === 'graduados' ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`;
+                btnAccion.innerText = modoActual === 'graduados' ? "Registrar Asistencia de Graduado" : "Registrar Asistencia de Invitados";
+            }
+        }
+
+        async function confirmarAcceso() {
+            if (!registroActual) return;
+
+            let invitadosActualizados = [];
+            if (modoActual === "invitados") {
+                let checkboxes = document.querySelectorAll('#listaInvitados input[type="checkbox"]');
+                checkboxes.forEach(cb => {
+                    invitadosActualizados.push({
+                        index: parseInt(cb.getAttribute('data-inv-index')),
+                        llegado: cb.checked
+                    });
+                });
+            }
+
+            let payload = {
+                action: "actualizarAsistencia",
+                rowNumber: registroActual.rowNumber,
+                estatusAsistencia: modoActual === "graduados" ? "A TIEMPO" : registroActual.estatusActual,
+                invitadosActualizados: modoActual === "invitados" ? invitadosActualizados : null
+            };
+
+            try {
+                let res = await fetch(WEB_APP_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "text/plain;charset=utf-8" },
+                    body: JSON.stringify(payload)
+                });
+                let json = await res.json();
+                if (json.status === "success") {
+                    alert("¡Acceso de " + modoActual + " registrado y sincronizado con éxito!");
+                    
+                    if (modoActual === "graduados") {
+                        registroActual.estatusActual = "A TIEMPO";
+                    } else {
+                        registroActual.invitadosEstatus = invitadosActualizados;
+                    }
+                    localStorage.setItem('unare_db_cache', JSON.stringify(dbMemoria));
+
+                    document.getElementById('inputQR').value = "";
+                    document.getElementById('resultadoContainer').classList.add('hidden');
+                } else {
+                    alert("Error al guardar: " + json.mensaje);
+                }
+            } catch (err) {
+                alert("Error de red al actualizar.");
+            }
+        }
+    </script>
+</body>
+</html>
